@@ -1,0 +1,30 @@
+#### Create account
+POST http://localhost:8080/api/accounts
+Content-Type: application/json
+
+{"accountId": "A-123"}
+
+
+#### Get info about the account
+GET http://localhost:8080/api/accounts/A-123
+
+
+#### deposit
+POST http://localhost:8080/api/accounts/A-123/deposit
+Content-Type: application/json
+
+{"amount": 100}
+
+
+#### Create card
+POST http://localhost:8080/api/cards
+Content-Type: application/json
+
+{"cardId": "1235", "accountId":  "A-123"}
+
+#### Add money
+POST http://localhost:8080/api/cards/1235/add-money
+Content-Type: application/json
+
+{"amount": 100}
+

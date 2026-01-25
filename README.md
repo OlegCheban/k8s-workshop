@@ -68,29 +68,6 @@ Baseline (recommended) port-forward:
 ```bash
 kubectl -n k8s-workshop port-forward svc/card-service 8080:8080
 ```
-
-Then call:
-
-```bash
-curl -X POST http://localhost:8080/api/accounts \
-  -H "Content-Type: application/json" \
-  -d '{"accountId":"A-123"}'
-
-curl -X POST http://localhost:8080/api/cards \
-  -H "Content-Type: application/json" \
-  -d '{"cardId":"C-123","accountId":"A-123"}'
-
-curl -X POST http://localhost:8080/api/cards/C-123/add-money \
-  -H "Content-Type: application/json" \
-  -d '{"amount":100}'
-
-curl -X POST http://localhost:8080/api/cards/C-123/pay \
-  -H "Content-Type: application/json" \
-  -d '{"amount":25,"merchant":"Coffee"}'
-
-curl http://localhost:8080/api/cards/C-123
-```
-
 Optional NodePort exposure (already in the local overlay):
 
 - NodePort `30080` maps to `card-service:8080`

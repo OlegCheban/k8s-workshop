@@ -19,7 +19,7 @@ spec:
         - operator: Exists
       containers:
         - name: fluentd
-          image: fluent/fluentd-kubernetes-daemonset:v1.16-debian-elasticsearch7-1.0
+          image: fluent/fluentd-kubernetes-daemonset:v1.16-debian-elasticsearch7-2
           env:
             - name: FLUENT_ELASTICSEARCH_HOST
               value: elasticsearch.observability.svc.cluster.local
