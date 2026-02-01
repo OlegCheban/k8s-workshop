@@ -5,4 +5,4 @@ metadata:
   namespace: k8s-workshop
 data:
   LOG_LEVEL: INFO
-  OTEL_EXPORTER_OTLP_ENDPOINT: http://localhost:4317
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://host.docker.internal:4317

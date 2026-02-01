@@ -86,9 +86,20 @@ curl http://localhost:8080/actuator/health/readiness
 curl http://localhost:8080/actuator/health/liveness
 ```
 
+
+### Apply updated ConfigMaps
+
+If you change the ConfigMaps (for example, updating `OTEL_EXPORTER_OTLP_ENDPOINT`), re-apply the manifests and restart the deployments so the new environment variables are picked up:
+
+```bash
+kubectl apply -k k8s/overlays/local
+kubectl -n k8s-workshop rollout restart deployment/account-service
+kubectl -n k8s-workshop rollout restart deployment/card-service
+```
+
 ## Observability Notes
 
-- **Tracing**: Both services export OTLP traces to the Docker Compose Jaeger instance (endpoint set via `OTEL_EXPORTER_OTLP_ENDPOINT`).
+- **Tracing**: Both services export OTLP traces to the Docker Compose Jaeger instance (endpoint set via `OTEL_EXPORTER_OTLP_ENDPOINT`). In Kubernetes, the default ConfigMap value points to `http://host.docker.internal:4317` so pods can reach the Docker Compose Jaeger running on the host; change this if you run Jaeger in-cluster or on another host.
 - **Logging**: Every API request logs JSON to stdout (Logback) and also emits a JSON line to stderr (for Fluentd). Fluentd ships logs from `/var/log/containers/*.log` into Elasticsearch and Kibana.
 
 ## Spring Boot buildpacks (optional)
