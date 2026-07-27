@@ -4,11 +4,18 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 ROOT_DIR=$(cd "${SCRIPT_DIR}/.." && pwd)
 
-kubectl apply -f "$ROOT_DIR/observability/logging/k8s/00-namespace.yaml"
-kubectl apply -f "$ROOT_DIR/observability/logging/k8s/elasticsearch.yaml"
-kubectl apply -f "$ROOT_DIR/observability/logging/k8s/kibana.yaml"
-kubectl apply -f "$ROOT_DIR/observability/logging/k8s/fluentd/rbac.yaml"
-kubectl apply -f "$ROOT_DIR/observability/logging/k8s/fluentd/configmap.yaml"
-kubectl apply -f "$ROOT_DIR/observability/logging/k8s/fluentd/daemonset.yaml"
+kubectl apply -k "$ROOT_DIR/observability/logging/k8s"
+
+# `kubectl apply` does not prune resources removed from the manifests. Clean up
+# the exact legacy Fluentd resources when upgrading an existing installation.
+kubectl -n observability delete \
+  daemonset/fluentd \
+  configmap/fluentd-config \
+  serviceaccount/fluentd \
+  --ignore-not-found
+kubectl delete \
+  clusterrole/fluentd \
+  clusterrolebinding/fluentd \
+  --ignore-not-found
 
 kubectl apply -k "$ROOT_DIR/k8s/overlays/local"

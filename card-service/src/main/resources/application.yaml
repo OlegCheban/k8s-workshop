@@ -31,10 +31,12 @@ management:
       enabled: true
   tracing:
     enabled: true
+    sampling:
+      probability: ${OTEL_TRACES_SAMPLER_PROBABILITY:1.0}
   otlp:
     tracing:
       endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4317}
-      protocol: grpc
+      transport: grpc
   metrics:
     export:
       otlp:
@@ -43,3 +45,9 @@ management:
 logging:
   level:
     root: ${LOG_LEVEL:INFO}
+  structured:
+    format:
+      console: logstash
+    json:
+      add:
+        service: ${spring.application.name}

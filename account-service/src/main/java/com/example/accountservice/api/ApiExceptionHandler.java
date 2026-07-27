@@ -3,8 +3,6 @@ package com.example.accountservice.api;
 import com.example.accountservice.exception.AccountAlreadyExistsException;
 import com.example.accountservice.exception.AccountNotFoundException;
 import com.example.accountservice.exception.InsufficientFundsException;
-import com.example.accountservice.logging.RequestLoggingSupport;
-import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -18,33 +16,37 @@ public class ApiExceptionHandler {
 
   @ExceptionHandler(AccountAlreadyExistsException.class)
   public ResponseEntity<ApiError> handleAccountExists(AccountAlreadyExistsException ex) {
-    logger.warn("account_exists error={}", ex.getMessage());
-    RequestLoggingSupport.logToStderr("account_exists", Map.of("message", ex.getMessage()));
+    logRejectedRequest("account_exists", "ACCOUNT_EXISTS");
     return ResponseEntity.status(HttpStatus.CONFLICT)
         .body(new ApiError("ACCOUNT_EXISTS", ex.getMessage()));
   }
 
   @ExceptionHandler(AccountNotFoundException.class)
   public ResponseEntity<ApiError> handleNotFound(AccountNotFoundException ex) {
-    logger.warn("account_not_found error={}", ex.getMessage());
-    RequestLoggingSupport.logToStderr("account_not_found", Map.of("message", ex.getMessage()));
+    logRejectedRequest("account_not_found", "ACCOUNT_NOT_FOUND");
     return ResponseEntity.status(HttpStatus.NOT_FOUND)
         .body(new ApiError("ACCOUNT_NOT_FOUND", ex.getMessage()));
   }
 
   @ExceptionHandler(InsufficientFundsException.class)
   public ResponseEntity<ApiError> handleInsufficient(InsufficientFundsException ex) {
-    logger.warn("insufficient_funds error={}", ex.getMessage());
-    RequestLoggingSupport.logToStderr("insufficient_funds", Map.of("message", ex.getMessage()));
+    logRejectedRequest("insufficient_funds", "INSUFFICIENT_FUNDS");
     return ResponseEntity.status(HttpStatus.CONFLICT)
         .body(new ApiError("INSUFFICIENT_FUNDS", ex.getMessage()));
   }
 
   @ExceptionHandler(IllegalArgumentException.class)
   public ResponseEntity<ApiError> handleBadRequest(IllegalArgumentException ex) {
-    logger.warn("bad_request error={}", ex.getMessage());
-    RequestLoggingSupport.logToStderr("bad_request", Map.of("message", ex.getMessage()));
+    logRejectedRequest("bad_request", "BAD_REQUEST");
     return ResponseEntity.status(HttpStatus.BAD_REQUEST)
         .body(new ApiError("BAD_REQUEST", ex.getMessage()));
+  }
+
+  private void logRejectedRequest(String event, String errorCode) {
+    logger.atWarn()
+        .addKeyValue("event", event)
+        .addKeyValue("outcome", "rejected")
+        .addKeyValue("errorCode", errorCode)
+        .log("Account request rejected");
   }
 }
