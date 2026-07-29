@@ -9,23 +9,23 @@ and an OpenTelemetry Collector agent/gateway topology.
 
 ```text
 card-service ──HTTP/W3C trace context──> account-service
-     │                                      │
-     └──────────── OTLP/gRPC traces ─────────┘
-                           │
-                           v
-              OTel Collector Gateway
-                 (Deployment + Service)
-                    │              │
-              traces│              │logs
-                    v              v
-                  Jaeger      Elasticsearch ──> Kibana
-                                    ^
-                                    │ OTLP/gRPC
-                         OTel Collector Agents
-                              (DaemonSet)
-                                    ^
-                                    │ filelog
-                       /var/log/pods/k8s-workshop_*
+
+Java services ──OTLP/gRPC traces──────────────────────────────────┐
+                                                                  │ 
+Java services ──JSON stdout──> /var/log/pods/k8s-workshop_*       │
+                                      │ filelog                   │
+                                      v                           │
+                         OTel Collector Agents                    │
+                              (DaemonSet)                         │
+                                      │                           v
+                                      └──OTLP/gRPC logs──> OTel Collector Gateway
+                                                              (Deployment + Service)
+                                                                 │
+                                              ┌──────────────────┴──────────────────┐
+                                              │                                     │
+                                           traces                                  logs
+                                              v                                     v
+                                            Jaeger                         Elasticsearch ──> Kibana
 ```
 
 The Java services continue to use SLF4J structured key-value logging. Spring
