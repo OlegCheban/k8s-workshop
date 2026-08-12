@@ -1,4 +1,4 @@
-# Kubernetes Native Spring Boot Workshop
+# Kubernetes Native Microservices Workshop
 
 This repository contains a workshop-ready Kubernetes-native microservices demo
 built with Spring Boot 3.x and Java 21. It demonstrates service discovery,
