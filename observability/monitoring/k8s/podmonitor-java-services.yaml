@@ -1,0 +1,39 @@
+# Discovered by Prometheus only because this object lives in the monitoring
+# namespace: kube-prometheus-stack-values.yaml restricts
+# podMonitorNamespaceSelector to kubernetes.io/metadata.name: monitoring.
+# The targets themselves are selected in k8s-workshop below.
+#
+# A PodMonitor is used instead of a ServiceMonitor because the application
+# Services publish port 8080 only, so the generated EndpointSlice never
+# contains the management port. A PodMonitor discovers pods directly and
+# addresses the container port by name.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: k8s-workshop-java-services
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: k8s-workshop
+    app.kubernetes.io/component: java-services
+spec:
+  # Without this the operator sets job="monitoring/k8s-workshop-java-services"
+  # for both services, so target-level series such as up and scrape_* cannot
+  # tell them apart. Taking the job from the pod label gives job="card-service"
+  # and job="account-service".
+  jobLabel: app
+  namespaceSelector:
+    matchNames:
+      - k8s-workshop
+  selector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values:
+          - account-service
+          - card-service
+  podMetricsEndpoints:
+    - port: management
+      path: /actuator/prometheus
+      scheme: http
+      interval: 30s
+      scrapeTimeout: 10s

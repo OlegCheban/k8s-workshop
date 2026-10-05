@@ -25,3 +25,8 @@ helm upgrade --install "${RELEASE_NAME}" "${CHART}" \
   --timeout 15m \
   --history-max 5
 
+# PodMonitor/ServiceMonitor/PrometheusRule objects are only discovered in the
+# monitoring namespace, because the chart values restrict the operator's
+# *NamespaceSelector to it. They are applied separately from the Helm release
+# so that a monitor change does not require a chart upgrade.
+kubectl apply -k "${ROOT_DIR}/observability/monitoring/k8s"

@@ -11,7 +11,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        include: health,info,metrics,prometheus
   endpoint:
     health:
       probes:
@@ -35,6 +35,8 @@ management:
       endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4317}
       transport: grpc
   metrics:
+    tags:
+      service: ${spring.application.name}
     export:
       otlp:
         enabled: false

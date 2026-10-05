@@ -50,15 +50,17 @@ namespace:
 
 ```text
 kube-state-metrics ─┐
-kubelet/cAdvisor ───┼──HTTP scrape──> Prometheus ──> PVC (10d) ──> Grafana
-node-exporter ──────┘                       │
-                                           └──rules──> Alertmanager
+kubelet/cAdvisor ───┤
+node-exporter ──────┼──HTTP scrape──> Prometheus ──> PVC (10d) ──> Grafana
+Java services ──────┘                       │
+  :8081/actuator/prometheus                 └──rules──> Alertmanager
 ```
 
 Prometheus uses the pull model and scrapes metric endpoints directly. Metrics
-do not pass through the OpenTelemetry Collector. Application metrics are still
-disabled at this stage; Collector and Java service monitors are added in the
-next monitoring stage.
+do not pass through the OpenTelemetry Collector. Java service metrics are
+scraped from the management port through a PodMonitor; OTLP metric export from
+the applications stays disabled. Collector self-monitoring is added in the next
+monitoring stage.
 
 ## Prerequisites
 
@@ -201,6 +203,88 @@ Docker Desktop does not publish the controller-manager, scheduler, etcd, or
 kube-proxy metrics on their usual node ports. Their ServiceMonitors are disabled
 in the workshop values to avoid permanently failing targets and false alerts.
 Enable them for a cluster that exposes those control-plane endpoints.
+
+## Application metrics
+
+Both services publish Micrometer metrics in the Prometheus text format on the
+management port:
+
+```bash
+kubectl -n k8s-workshop port-forward deployment/card-service 8081:8081
+curl http://localhost:8081/actuator/prometheus
+```
+
+The application Services publish port `8080` only, so the generated
+EndpointSlice never contains the management port and a ServiceMonitor would
+have no address to scrape. `observability/monitoring/k8s` therefore installs a
+PodMonitor, which discovers pods directly through the API server and addresses
+the container port by its name `management`. The object lives in the
+`monitoring` namespace because the chart values restrict the operator's
+`podMonitorNamespaceSelector` to it, and selects its targets in `k8s-workshop`
+through `spec.namespaceSelector`.
+
+Two labels identify a service, and they are not interchangeable:
+
+- `service` is an application tag, added by `management.metrics.tags.service`.
+  It matches the `service` field of the structured logs, so one identifier
+  correlates metrics, logs, and traces. It exists only on meters the
+  application itself publishes.
+- `job` is a target label, taken from the pod label `app` through the
+  PodMonitor's `jobLabel`. It is also present on the series Prometheus
+  synthesises per target, such as `up` and `scrape_samples_scraped`, which
+  carry no application tags at all. Without `jobLabel` the operator would name
+  the job after the PodMonitor, giving both services the same value and making
+  per-service target alerts impossible.
+
+Use `service` to correlate across signals and `job` to alert on scrape health.
+
+The RED signals come from the `http.server.requests` timer that Spring Boot
+records for every request, with no instrumentation in the controllers:
+
+```promql
+sum by (service) (rate(http_server_requests_seconds_count[5m]))
+
+sum by (service) (rate(http_server_requests_seconds_count{outcome="SERVER_ERROR"}[5m]))
+  / sum by (service) (rate(http_server_requests_seconds_count[5m]))
+```
+
+Latency is available as a count/sum average and a maximum. Histogram buckets
+are deliberately not enabled yet: they multiply the series count, and they are
+introduced together with recording rules and SLO alerts in the next stage.
+
+Verify the scrape targets:
+
+```bash
+kubectl -n monitoring get podmonitor
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:9090
+```
+
+Open http://localhost:9090/targets and look for
+`podMonitor/monitoring/k8s-workshop-java-services/0`.
+
+## Generating traffic
+
+A freshly deployed workshop has no requests, so every RED query returns an
+empty result and every graph is a flat line. The generator produces a steady
+stream:
+
+```bash
+./scripts/load-gen.sh            # 1800 iterations, one second apart
+./scripts/load-gen.sh 300 0.2    # shorter and faster
+```
+
+It runs as a pod inside the cluster, because the pod network is not reachable
+from the host. Each iteration calls `add-money`, `pay`, and a card lookup, and
+every fifth iteration adds a deliberate `404` so that the error ratio stays
+around 6 percent instead of zero. Because `add-money` and `pay` both call
+`account-service`, the same traffic also fills Jaeger with two-service traces.
+
+```bash
+kubectl -n k8s-workshop logs -f load-gen
+kubectl -n k8s-workshop delete pod load-gen
+```
+
+Re-running the script replaces an existing `load-gen` pod.
 
 ## Structured logging
 
