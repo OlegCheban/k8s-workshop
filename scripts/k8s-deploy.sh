@@ -18,4 +18,6 @@ kubectl delete \
   clusterrolebinding/fluentd \
   --ignore-not-found
 
+bash "$SCRIPT_DIR/monitoring-deploy.sh"
+
 kubectl apply -k "$ROOT_DIR/k8s/overlays/local"

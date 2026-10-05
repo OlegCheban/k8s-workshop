@@ -45,14 +45,27 @@ The gateway is the only component that knows the backend endpoints:
 - logs are written to Elasticsearch index `otel-logs`;
 - traces are forwarded to Jaeger over OTLP/gRPC.
 
-Application metrics export is intentionally disabled for now. The agents and
-gateway expose their own operational Prometheus metrics on port `8888`.
+The monitoring foundation is installed separately in the `monitoring`
+namespace:
+
+```text
+kube-state-metrics ─┐
+kubelet/cAdvisor ───┼──HTTP scrape──> Prometheus ──> PVC (10d) ──> Grafana
+node-exporter ──────┘                       │
+                                           └──rules──> Alertmanager
+```
+
+Prometheus uses the pull model and scrapes metric endpoints directly. Metrics
+do not pass through the OpenTelemetry Collector. Application metrics are still
+disabled at this stage; Collector and Java service monitors are added in the
+next monitoring stage.
 
 ## Prerequisites
 
 - Java 21
 - Docker Desktop with Kubernetes enabled
 - `kubectl`
+- Helm 3
 - Docker Engine and Docker Compose
 
 This local setup keeps Jaeger in Docker Compose outside Kubernetes. Therefore,
@@ -97,14 +110,20 @@ The script installs, in order:
 - Elasticsearch and Kibana;
 - OTel Collector RBAC and configuration;
 - OTel Collector gateway and node agents;
+- `kube-prometheus-stack` in the `monitoring` namespace;
 - both Java services in the `k8s-workshop` namespace.
 
 To apply the resources manually:
 
 ```bash
 kubectl apply -k observability/logging/k8s
+bash scripts/monitoring-deploy.sh
 kubectl apply -k k8s/overlays/local
 ```
+
+The monitoring installation is reproducible: chart version `87.18.1` is pinned
+in `scripts/monitoring-deploy.sh`. Workshop overrides are stored in
+`observability/monitoring/kube-prometheus-stack-values.yaml`.
 
 The applications send traces to the cross-namespace endpoint:
 
@@ -143,6 +162,45 @@ Collector internal metrics:
 kubectl -n observability port-forward svc/otel-collector-gateway 8888:8888
 curl http://localhost:8888/metrics
 ```
+
+## Monitoring foundation
+
+The Helm release installs Prometheus Operator, Prometheus, Grafana,
+Alertmanager, kube-state-metrics, and node-exporter. Prometheus scrapes every
+30 seconds, keeps data for 10 days (up to 8 GB), and stores it on a 10 GiB PVC.
+The PVC uses the cluster's default StorageClass.
+
+Prometheus:
+
+```bash
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:9090
+```
+
+Grafana:
+
+```bash
+kubectl -n monitoring get secret kube-prometheus-stack-grafana \
+  -o jsonpath="{.data.admin-password}" | base64 --decode
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80
+```
+
+Open http://localhost:3000 and sign in as `admin` with the password returned by
+the first command. The password is generated into a Kubernetes Secret and is
+not committed to the repository.
+
+Alertmanager:
+
+```bash
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-alertmanager 9093:9093
+```
+
+External notification receivers are intentionally not configured yet. The
+built-in Kubernetes alert rules and Alertmanager UI are available immediately.
+
+Docker Desktop does not publish the controller-manager, scheduler, etcd, or
+kube-proxy metrics on their usual node ports. Their ServiceMonitors are disabled
+in the workshop values to avoid permanently failing targets and false alerts.
+Enable them for a cluster that exposes those control-plane endpoints.
 
 ## Structured logging
 
@@ -242,6 +300,10 @@ kubectl -n observability logs deployment/otel-collector-gateway
 kubectl -n observability logs daemonset/otel-collector-agent
 kubectl -n observability get pvc otel-collector-gateway-storage
 
+kubectl -n monitoring get pods
+kubectl -n monitoring get pvc
+kubectl -n monitoring get prometheus,alertmanager
+
 kubectl -n k8s-workshop get pods
 kubectl -n k8s-workshop logs deployment/card-service
 kubectl -n k8s-workshop logs deployment/account-service
@@ -280,6 +342,16 @@ curl http://localhost:8081/actuator/health/liveness
 ./scripts/k8s-undeploy.sh
 docker compose -f observability/tracing/docker-compose-all.yaml down
 ```
+
+To remove only monitoring:
+
+```bash
+bash scripts/monitoring-undeploy.sh
+```
+
+The Prometheus StatefulSet PVC is retained by Kubernetes when the Helm release
+is removed, protecting metric history from an accidental uninstall. Delete the
+exact PVC manually only when that history is no longer needed.
 
 The undeploy script deletes the gateway PVC together with the gateway manifest.
 The per-node `/var/lib/otelcol-agent` checkpoint directory is a hostPath and is
