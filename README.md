@@ -248,9 +248,12 @@ sum by (service) (rate(http_server_requests_seconds_count{outcome="SERVER_ERROR"
   / sum by (service) (rate(http_server_requests_seconds_count[5m]))
 ```
 
-Latency is available as a count/sum average and a maximum. Histogram buckets
-are deliberately not enabled yet: they multiply the series count, and they are
-introduced together with recording rules and SLO alerts in the next stage.
+Latency comes from histogram buckets, so percentiles can be computed across
+pods:
+
+```promql
+histogram_quantile(0.99, sum by (service, le) (rate(http_server_requests_seconds_bucket[5m])))
+```
 
 Verify the scrape targets:
 
@@ -261,6 +264,63 @@ kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:909
 
 Open http://localhost:9090/targets and look for
 `podMonitor/monitoring/k8s-workshop-java-services/0`.
+
+## Latency buckets and cardinality
+
+Buckets are an explicit list rather than a percentile histogram:
+
+```yaml
+management:
+  metrics:
+    distribution:
+      slo:
+        http.server.requests: 2ms,5ms,10ms,25ms,50ms,100ms,250ms,500ms,1s,2s
+```
+
+That choice was measured rather than assumed. Samples scraped from one
+`card-service` pod:
+
+| Configuration | buckets per label combination | samples per pod |
+|---|---|---|
+| no histogram | 0 | 90 |
+| `percentiles-histogram` clamped to `5ms..2s` | 41 | 386 |
+| the explicit list above | 11 | 178 |
+
+`percentiles-histogram` generates a fixed power-of-two grid that clamping only
+trims at the ends, so even a narrow range still cost 41 buckets per label
+combination. An explicit list costs exactly what it lists.
+
+Boundaries have to bracket the traffic to be of any use. A first version
+starting at `10ms` put both p95 and p99 inside bucket one, where
+`histogram_quantile` has nothing to do but interpolate, and the percentile was
+effectively a constant. With `2ms` and `5ms` added the distribution is visible:
+
+| | p50 | p95 | p99 |
+|---|---|---|---|
+| card-service | 3.1 ms | 8.2 ms | 9.7 ms |
+| account-service | 1.0 ms | 1.9 ms | 2.0 ms |
+
+`account-service` still sits almost entirely inside the first bucket, because
+answering from an in-memory map takes under a millisecond. Add a `1ms` edge if
+that resolution is wanted.
+
+Two things to know before editing the list:
+
+- For one `rate()` window after a change, a quantile query sums the old and the
+  new `le` sets together and returns nonsense. Prometheus reports it as a
+  monotonicity warning naming the stale boundaries.
+- Keep an edge exactly on any latency threshold an SLO names. The error budget
+  then reads a bucket directly instead of interpolating between two:
+
+```promql
+sum by (service) (rate(http_server_requests_seconds_bucket{le="0.25"}[5m]))
+  / sum by (service) (rate(http_server_requests_seconds_count[5m]))
+```
+
+The PodMonitor drops the `exception` label, which repeats the exception class
+name already carried by `error`. Because the two always vary together this does
+not reduce the series count at all; it only keeps the index and the query output
+smaller.
 
 ## Generating traffic
 

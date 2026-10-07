@@ -37,3 +37,10 @@ spec:
       scheme: http
       interval: 30s
       scrapeTimeout: 10s
+      metricRelabelings:
+        # error and exception both carry the exception class name, so one of them
+        # is pure overhead. Note what this does and does not buy: because the two
+        # labels always vary together, dropping one does not reduce the series
+        # count at all. It shrinks the index and keeps query output readable.
+        - action: labeldrop
+          regex: exception

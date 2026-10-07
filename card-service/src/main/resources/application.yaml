@@ -40,6 +40,17 @@ management:
   metrics:
     tags:
       service: ${spring.application.name}
+    distribution:
+      # Explicit buckets, not percentiles-histogram. Clamping the Micrometer
+      # default to 5ms..2s was measured and still produced 41 buckets per label
+      # combination, far more resolution than these services need. These ten
+      # boundaries bracket the measured distribution: warm requests land in single
+      # digit milliseconds, a cold JVM in the low hundreds. Without the 2ms and 5ms
+      # edges p95 and p99 both fell inside the first bucket and were pure
+      # interpolation. The upper edges sit where an SLO threshold would, so a query
+      # for them reads a bucket edge directly instead of interpolating.
+      slo:
+        http.server.requests: 2ms,5ms,10ms,25ms,50ms,100ms,250ms,500ms,1s,2s
     export:
       otlp:
         enabled: false
