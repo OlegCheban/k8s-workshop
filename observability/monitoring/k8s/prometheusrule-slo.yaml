@@ -1,0 +1,327 @@
+# Service level objectives and the alerts that defend them.
+#
+#   availability   99.9% of requests answered without a 5xx, over 30 days
+#                  -> error budget 0.1% of requests
+#   latency        99%   of requests faster than 250ms,      over 30 days
+#                  -> error budget 1% of requests
+#
+# Those two numbers are the only knobs. Every threshold below is a burn rate
+# multiplied by the matching budget, and the arithmetic is written out at each
+# rule so a changed objective can be traced through.
+#
+# 250ms is not an arbitrary round number: it is one of the histogram bucket
+# edges configured in both application.yaml files, so the latency SLI reads a
+# bucket directly and needs no interpolation.
+#
+# The alerts use multi-window multi-burn-rate (Google SRE workbook) rather than
+# a static threshold. A single "error ratio above X for 5 minutes" rule has to
+# choose between paging on harmless blips and sleeping through a slow leak; two
+# windows at once separate those cases. The long window establishes that the
+# budget really is being consumed; the short window establishes that it is
+# still happening now, which is what makes the alert resolve on its own once
+# the incident ends.
+#
+# Written by hand here because it is the thing being taught. In production this
+# shape is usually generated from an SLO spec by Sloth or Pyrra, which emit
+# almost exactly these rules.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: k8s-workshop-slo
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: k8s-workshop
+    app.kubernetes.io/component: java-services
+spec:
+  groups:
+    # ------------------------------------------------------------------
+    # SLI windows. The burn-rate alerts need the same ratio over several
+    # windows, so each one is recorded once here rather than recomputed per
+    # alert. ratio5m already exists in the RED group; the rest extend it.
+    #
+    # Each numerator carries the same `or <total> * 0` tail as the RED group.
+    # For the alerts this changes nothing -- an absent ratio and a zero ratio
+    # both fail a `>` comparison. It is here because the alternative is worse
+    # to maintain: ratio5m comes from the RED group and does have the tail, so
+    # without it the same `and` expression would mix two series with opposite
+    # absent-semantics, which is the kind of detail that survives exactly as
+    # long as the person who wrote it remembers. It also means the ratio can be
+    # graphed as a flat zero instead of a gap.
+    #
+    # The latency group below needs no such tail: it divides two series that
+    # always exist together while traffic flows, so it reaches zero on its own.
+    # ------------------------------------------------------------------
+    - name: k8s-workshop-slo-availability-windows
+      interval: 30s
+      rules:
+        - record: service:http_server_errors:ratio30m
+          expr: |
+            (
+              sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop",outcome="SERVER_ERROR"}[30m]))
+              or
+              sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop"}[30m])) * 0
+            )
+              / sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop"}[30m]))
+        - record: service:http_server_errors:ratio1h
+          expr: |
+            (
+              sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop",outcome="SERVER_ERROR"}[1h]))
+              or
+              sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop"}[1h])) * 0
+            )
+              / sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop"}[1h]))
+        - record: service:http_server_errors:ratio2h
+          expr: |
+            (
+              sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop",outcome="SERVER_ERROR"}[2h]))
+              or
+              sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop"}[2h])) * 0
+            )
+              / sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop"}[2h]))
+        - record: service:http_server_errors:ratio6h
+          expr: |
+            (
+              sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop",outcome="SERVER_ERROR"}[6h]))
+              or
+              sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop"}[6h])) * 0
+            )
+              / sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop"}[6h]))
+        - record: service:http_server_errors:ratio1d
+          expr: |
+            (
+              sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop",outcome="SERVER_ERROR"}[1d]))
+              or
+              sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop"}[1d])) * 0
+            )
+              / sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop"}[1d]))
+        - record: service:http_server_errors:ratio3d
+          expr: |
+            (
+              sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop",outcome="SERVER_ERROR"}[3d]))
+              or
+              sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop"}[3d])) * 0
+            )
+              / sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop"}[3d]))
+
+    # The latency SLI is the share of requests NOT in the 250ms bucket. With no
+    # traffic the ratio is absent rather than zero, which is the behaviour an
+    # alert wants here: no requests cannot violate a latency objective.
+    - name: k8s-workshop-slo-latency-windows
+      interval: 30s
+      rules:
+        - record: service:http_server_requests_slow:ratio5m
+          expr: |
+            1 - (
+              sum by (service) (rate(http_server_requests_seconds_bucket{namespace="k8s-workshop",le="0.25"}[5m]))
+                / sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop"}[5m]))
+            )
+        - record: service:http_server_requests_slow:ratio30m
+          expr: |
+            1 - (
+              sum by (service) (rate(http_server_requests_seconds_bucket{namespace="k8s-workshop",le="0.25"}[30m]))
+                / sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop"}[30m]))
+            )
+        - record: service:http_server_requests_slow:ratio1h
+          expr: |
+            1 - (
+              sum by (service) (rate(http_server_requests_seconds_bucket{namespace="k8s-workshop",le="0.25"}[1h]))
+                / sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop"}[1h]))
+            )
+        - record: service:http_server_requests_slow:ratio2h
+          expr: |
+            1 - (
+              sum by (service) (rate(http_server_requests_seconds_bucket{namespace="k8s-workshop",le="0.25"}[2h]))
+                / sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop"}[2h]))
+            )
+        - record: service:http_server_requests_slow:ratio6h
+          expr: |
+            1 - (
+              sum by (service) (rate(http_server_requests_seconds_bucket{namespace="k8s-workshop",le="0.25"}[6h]))
+                / sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop"}[6h]))
+            )
+        - record: service:http_server_requests_slow:ratio1d
+          expr: |
+            1 - (
+              sum by (service) (rate(http_server_requests_seconds_bucket{namespace="k8s-workshop",le="0.25"}[1d]))
+                / sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop"}[1d]))
+            )
+        - record: service:http_server_requests_slow:ratio3d
+          expr: |
+            1 - (
+              sum by (service) (rate(http_server_requests_seconds_bucket{namespace="k8s-workshop",le="0.25"}[3d]))
+                / sum by (service) (rate(http_server_requests_seconds_count{namespace="k8s-workshop"}[3d]))
+            )
+
+    # ------------------------------------------------------------------
+    # Alerts.
+    #
+    # Every alert carries namespace: k8s-workshop, because the Alertmanager
+    # config installed by the chart groups by namespace and its inhibit rules
+    # compare on (namespace, alertname). Without that label the alert would
+    # land in its own group and nothing would ever be suppressed.
+    #
+    # Page and ticket deliberately share one alertname and differ only in
+    # severity. That is what lets the chart's existing inhibit rule -- critical
+    # suppresses warning when namespace and alertname match -- stop a single
+    # incident from arriving as two notifications.
+    #
+    # No `for:` clause. The short window is the debounce: requiring the burn
+    # rate to hold over both a long and a short window already rejects blips,
+    # and adding `for:` on top would only delay a page that is meant to be
+    # fast.
+    # ------------------------------------------------------------------
+    - name: k8s-workshop-slo-alerts
+      rules:
+        - alert: K8sWorkshopErrorBudgetBurn
+          # 14.4x over 1h exhausts a 30d budget in ~2 days; 6x in ~5 days.
+          # 14.4 * 0.001 = 0.0144      6 * 0.001 = 0.006
+          expr: |
+            (
+              service:http_server_errors:ratio1h > 0.0144
+              and
+              service:http_server_errors:ratio5m > 0.0144
+            )
+            or
+            (
+              service:http_server_errors:ratio6h > 0.006
+              and
+              service:http_server_errors:ratio30m > 0.006
+            )
+          labels:
+            severity: critical
+            namespace: k8s-workshop
+            slo: availability
+          annotations:
+            summary: "{{ $labels.service }} is burning its availability budget fast"
+            description: >-
+              5xx share is {{ $value | humanizePercentage }}, consuming the 30
+              day error budget (0.1% of requests) at least 6x faster than it can
+              be sustained; either paging pair may have tripped, so do not read a
+              single rate out of this. At 14.4x the whole budget is gone in about
+              two days. Check whether a dependency is unreachable before looking
+              at the service itself.
+            dashboard: http://localhost:3000/d/k8s-workshop-red
+            runbook: "README.md, section: Service level objectives"
+
+        - alert: K8sWorkshopErrorBudgetBurn
+          # 3x over 1d and 1x over 3d. Slow leaks: worth a ticket in business
+          # hours, never a page.
+          # 3 * 0.001 = 0.003          1 * 0.001 = 0.001
+          expr: |
+            (
+              service:http_server_errors:ratio1d > 0.003
+              and
+              service:http_server_errors:ratio2h > 0.003
+            )
+            or
+            (
+              service:http_server_errors:ratio3d > 0.001
+              and
+              service:http_server_errors:ratio6h > 0.001
+            )
+          labels:
+            severity: warning
+            namespace: k8s-workshop
+            slo: availability
+          annotations:
+            summary: "{{ $labels.service }} is slowly leaking its availability budget"
+            description: >-
+              5xx share is {{ $value | humanizePercentage }} over a window of
+              hours to days. The budget is not in immediate danger, but at this
+              rate it will not last the 30 day window. Note that a short outage
+              against sparse traffic can trip this too: the ratio is errors over
+              requests, not over wall-clock time.
+            dashboard: http://localhost:3000/d/k8s-workshop-red
+            runbook: "README.md, section: Service level objectives"
+
+        - alert: K8sWorkshopLatencyBudgetBurn
+          # Same windows and burn rates against the 1% latency budget.
+          # 14.4 * 0.01 = 0.144        6 * 0.01 = 0.06
+          expr: |
+            (
+              service:http_server_requests_slow:ratio1h > 0.144
+              and
+              service:http_server_requests_slow:ratio5m > 0.144
+            )
+            or
+            (
+              service:http_server_requests_slow:ratio6h > 0.06
+              and
+              service:http_server_requests_slow:ratio30m > 0.06
+            )
+          labels:
+            severity: critical
+            namespace: k8s-workshop
+            slo: latency
+          annotations:
+            summary: "{{ $labels.service }} is burning its latency budget fast"
+            description: >-
+              {{ $value | humanizePercentage }} of requests are slower than 250ms,
+              against an objective of 1%. Compare the p50/p95/p99 panel: a lifted
+              p50 points at the service or its node, a lifted p99 alone points at
+              a dependency or garbage collection.
+            dashboard: http://localhost:3000/d/k8s-workshop-red
+            runbook: "README.md, section: Service level objectives"
+
+        - alert: K8sWorkshopLatencyBudgetBurn
+          # 3 * 0.01 = 0.03            1 * 0.01 = 0.01
+          expr: |
+            (
+              service:http_server_requests_slow:ratio1d > 0.03
+              and
+              service:http_server_requests_slow:ratio2h > 0.03
+            )
+            or
+            (
+              service:http_server_requests_slow:ratio3d > 0.01
+              and
+              service:http_server_requests_slow:ratio6h > 0.01
+            )
+          labels:
+            severity: warning
+            namespace: k8s-workshop
+            slo: latency
+          annotations:
+            summary: "{{ $labels.service }} is slowly leaking its latency budget"
+            description: >-
+              {{ $value | humanizePercentage }} of requests slower than 250ms,
+              sustained over days, against an objective of 1%.
+            dashboard: http://localhost:3000/d/k8s-workshop-red
+            runbook: "README.md, section: Service level objectives"
+
+        # A symptom alert that no SLI can express: an SLO says nothing while
+        # there is nothing to measure. This is the one alert that depends on
+        # jobLabel: app in the PodMonitor -- up is synthesised by Prometheus and
+        # carries no application tags, so without that label both services share
+        # one job value and this alert could not name which one went away.
+        #
+        # The absent() branches are not redundant with `up == 0`, which was
+        # verified rather than assumed: scaling a deployment to zero removes the
+        # pod, the PodMonitor then finds no target, and `up` goes *absent* --
+        # there is no zero to compare against and `up == 0` alone stays silent.
+        # `up == 0` covers a pod that exists but cannot be scraped (crash loop
+        # with a live container, closed port, unready probe); absent() covers a
+        # target that stopped existing, including the failure this repository
+        # keeps warning about -- a PodMonitor whose selector no longer matches,
+        # which otherwise fails in complete silence.
+        #
+        # The service names are spelled out because absent() needs a concrete
+        # label set to report. The PodMonitor already enumerates the same two.
+        - alert: K8sWorkshopTargetDown
+          expr: |
+            up{job=~"card-service|account-service"} == 0
+            or absent(up{job="card-service"})
+            or absent(up{job="account-service"})
+          for: 5m
+          labels:
+            severity: critical
+            namespace: k8s-workshop
+          annotations:
+            summary: "{{ $labels.job }} is not being scraped"
+            description: >-
+              Prometheus has no healthy target for {{ $labels.job }}. While this
+              is firing the RED panels are blank and every burn-rate alert above
+              is silent, because an absent ratio evaluates to nothing -- which is
+              exactly why this alert exists.
+            dashboard: http://localhost:3000/d/k8s-workshop-red
+            runbook: "README.md, section: Service level objectives"

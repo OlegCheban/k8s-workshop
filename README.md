@@ -380,6 +380,88 @@ Two conventions in the panel JSON are worth keeping when adding panels:
   reserved status palette; the throughput tile leaves its number in ink and
   names the service in text, so identity never rests on colour alone.
 
+## Service level objectives
+
+`observability/monitoring/k8s/prometheusrule-slo.yaml` declares two objectives
+and the alerts that defend them:
+
+| Objective | Target | Error budget |
+|---|---|---|
+| Availability | 99.9% of requests answered without a 5xx, over 30 days | 0.1% of requests |
+| Latency | 99% of requests faster than 250ms, over 30 days | 1% of requests |
+
+Those two numbers are the only knobs. Every threshold in the file is a burn
+rate multiplied by the matching budget, written out beside each rule. `250ms`
+is one of the histogram bucket edges, so the latency SLI reads a bucket instead
+of interpolating.
+
+### Why burn rate instead of a threshold
+
+A rule like "error ratio above 1% for 5 minutes" has to choose between paging on
+harmless blips and sleeping through a slow leak. Multi-window multi-burn-rate
+(Google SRE workbook) asks two questions at once — the long window establishes
+that the budget really is being consumed, the short window that it is still
+happening now:
+
+| Severity | Long window | Short window | Burn rate | Budget gone in |
+|---|---|---|---|---|
+| page | 1h | 5m | 14.4x | ~2 days |
+| page | 6h | 30m | 6x | ~5 days |
+| ticket | 1d | 2h | 3x | ~10 days |
+| ticket | 3d | 6h | 1x | 30 days |
+
+The short window is also what makes the alert resolve by itself once the
+incident ends. There is deliberately no `for:` clause: requiring both windows
+at once already rejects blips, and `for:` would only delay a page that is meant
+to be fast.
+
+These rules are written by hand because they are the thing being taught. In
+production this shape is normally generated from an SLO spec by Sloth or Pyrra,
+which emit very nearly this output.
+
+### Two label conventions that are load-bearing
+
+The Alertmanager config installed by the chart groups by `namespace` and its
+inhibit rules compare on `(namespace, alertname)`. Both alerts therefore carry
+`namespace: k8s-workshop`, and page and ticket deliberately **share one
+alertname** and differ only in `severity`. That is what makes one incident
+arrive as one notification: with the page active, Alertmanager reports the
+ticket as `"state": "suppressed"`. Give them separate alertnames and both would
+be delivered.
+
+No external notification receivers are configured; the default receiver is
+`"null"`. Alerts are visible in the Prometheus and Alertmanager UIs.
+
+### Demonstrating a page
+
+`card-service` answers `add-money` and `pay` from `account-service`, so removing
+the dependency produces real 5xx:
+
+```bash
+kubectl -n k8s-workshop scale deployment/account-service --replicas=0
+bash scripts/load-gen.sh 1200 0.3
+```
+
+Reading a card still returns `200` — it is served from local memory — while the
+two write paths return `500`. The `6x / 6h+30m` pair trips after a couple of
+minutes, the ticket slightly before the page because its thresholds are lower.
+Restore with `--replicas=1`; the alerts clear on their own as the windows slide
+past the outage.
+
+### What `up == 0` does not catch
+
+`K8sWorkshopTargetDown` also carries two `absent()` branches, which the
+demonstration above proved necessary. Scaling a deployment to zero removes the
+pod, the PodMonitor then finds no target, and `up` goes **absent** — there is no
+zero to compare against, and `up == 0` on its own stays silent. `up == 0`
+covers a pod that exists but cannot be scraped; `absent()` covers a target that
+stopped existing, including a PodMonitor whose selector no longer matches, which
+otherwise fails in complete silence.
+
+This is also the alert that depends on `jobLabel: app`. `up` is synthesised by
+Prometheus and carries no application tags, so without that label both services
+would share one `job` value and the alert could not say which one went away.
+
 ## Generating traffic
 
 A freshly deployed workshop has no requests, so every RED query returns an

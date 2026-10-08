@@ -3,6 +3,7 @@ kind: Kustomization
 resources:
   - podmonitor-java-services.yaml
   - prometheusrule-red.yaml
+  - prometheusrule-slo.yaml
 
 # The dashboard stays a plain .json file so it can be linted, diffed and opened
 # in Grafana's own editor, and is turned into the ConfigMap the Grafana sidecar
