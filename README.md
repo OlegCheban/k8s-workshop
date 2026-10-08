@@ -322,6 +322,64 @@ name already carried by `error`. Because the two always vary together this does
 not reduce the series count at all; it only keeps the index and the query output
 smaller.
 
+## Recording rules and the RED dashboard
+
+`observability/monitoring/k8s/prometheusrule-red.yaml` records nine series for
+the three signals. Dashboards and alerts read those instead of the raw
+expressions, which keeps their queries cheap and, more importantly, keeps one
+definition of "error" in one place:
+
+```text
+service:http_server_requests:rate5m                      R
+service:http_server_requests_by_outcome:rate5m
+service:http_server_errors:rate5m                        E, 5xx
+service:http_client_errors:rate5m                        E, 4xx
+service:http_server_errors:ratio5m
+service:http_client_errors:ratio5m
+service:http_server_request_duration_seconds:p50_5m      D
+service:http_server_request_duration_seconds:p95_5m
+service:http_server_request_duration_seconds:p99_5m
+```
+
+Server and client errors are deliberately separate. Only a 5xx means the
+service failed, and only that series may burn an error budget; a 4xx is the
+caller asking for something that does not exist. The workshop load generator
+produces a steady stream of 404s, which would otherwise look like a service at
+6 percent failure.
+
+Both error rates carry an `or service:http_server_requests:rate5m * 0` tail.
+Without it a service that has not failed produces no series at all, the ratio
+divides by nothing, and the dashboard shows "No data" where it should show a
+healthy zero — indistinguishable, to whoever is on call, from a broken
+pipeline. Multiplying the recorded total by zero carries the `service` label
+over, which a bare `vector(0)` cannot do. Absent still means no traffic,
+because with no traffic the total is absent too.
+
+The dashboard is a plain JSON file under
+`observability/monitoring/k8s/dashboards/`, turned into a ConfigMap by
+`configMapGenerator`. Grafana's sidecar selects by the `grafana_dashboard=1`
+label and reloads within seconds of `kubectl apply`:
+
+```bash
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80
+```
+
+Then open http://localhost:3000/d/k8s-workshop-red.
+
+`disableNameSuffixHash: true` matters here. Without it each edit would generate
+a ConfigMap under a new hashed name, `kubectl apply` would not prune the old
+one, and Grafana would accumulate a duplicate dashboard per edit.
+
+Two conventions in the panel JSON are worth keeping when adding panels:
+
+- Each service gets its colour through an explicit `byName` override rather
+  than Grafana's default `palette-classic`, which assigns by series order. With
+  the default, filtering one service out repaints the other, and a reader who
+  learned which colour is which is misled.
+- Colour means state only where it carries state. The two threshold tiles use a
+  reserved status palette; the throughput tile leaves its number in ink and
+  names the service in text, so identity never rests on colour alone.
+
 ## Generating traffic
 
 A freshly deployed workshop has no requests, so every RED query returns an

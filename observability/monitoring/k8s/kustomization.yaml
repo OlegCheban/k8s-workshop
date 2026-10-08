@@ -2,3 +2,24 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - podmonitor-java-services.yaml
+  - prometheusrule-red.yaml
+
+# The dashboard stays a plain .json file so it can be linted, diffed and opened
+# in Grafana's own editor, and is turned into the ConfigMap the Grafana sidecar
+# watches. The sidecar selects by the grafana_dashboard=1 label rather than by
+# name, and unlike the Prometheus operator it searches every namespace -- this
+# one is kept in monitoring only for consistency with the rule and the monitor.
+configMapGenerator:
+  - name: grafana-dashboard-k8s-workshop-red
+    namespace: monitoring
+    files:
+      - k8s-workshop-red.json=dashboards/k8s-workshop-red.json
+    options:
+      labels:
+        grafana_dashboard: "1"
+
+# Without this, every edit would generate a ConfigMap under a new hashed name.
+# `kubectl apply` does not prune, so the old ConfigMap would stay behind and
+# Grafana would accumulate a duplicate dashboard per edit.
+generatorOptions:
+  disableNameSuffixHash: true

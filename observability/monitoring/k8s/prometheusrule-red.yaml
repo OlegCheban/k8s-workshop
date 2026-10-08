@@ -1,0 +1,101 @@
+# Recording rules for the RED signals. Like the PodMonitor, this object has to
+# live in the monitoring namespace: the chart values restrict the operator's
+# ruleNamespaceSelector to it.
+#
+# Dashboards and alerts read these recorded series instead of recomputing the
+# raw expressions, which keeps panel and alert queries cheap and, more
+# importantly, keeps one definition of "error" in one place.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: k8s-workshop-red
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: k8s-workshop
+    app.kubernetes.io/component: java-services
+spec:
+  groups:
+    - name: k8s-workshop-red
+      # Matches the scrape interval. A shorter interval would re-evaluate the
+      # same 5m window without new input.
+      interval: 30s
+      rules:
+        # R
+        - record: service:http_server_requests:rate5m
+          expr: |
+            sum by (service) (
+              rate(http_server_requests_seconds_count{namespace="k8s-workshop"}[5m])
+            )
+
+        - record: service:http_server_requests_by_outcome:rate5m
+          expr: |
+            sum by (service, outcome) (
+              rate(http_server_requests_seconds_count{namespace="k8s-workshop"}[5m])
+            )
+
+        # E, split on purpose. Only 5xx means the service failed, and that is
+        # the series an SLO and its alerts must use. A 4xx is the caller asking
+        # for something that does not exist -- worth watching, since a jump can
+        # mean a broken client or a bad deploy, but it is not an outage and must
+        # not burn an error budget.
+        #
+        # The `or ... * 0` tail is not decoration. Without it, a service that
+        # has simply not failed produces no series at all, the ratio below
+        # divides by nothing, and a dashboard shows "No data" where it should
+        # show a healthy zero -- indistinguishable from a broken pipeline. The
+        # multiplication carries the service label over from the recorded total
+        # and drops __name__, which a bare `vector(0)` cannot do.
+        #
+        # This keeps the two states distinct the right way round: absent still
+        # means no traffic at all, because with no traffic the total is absent
+        # too and the zero series disappears with it.
+        - record: service:http_server_errors:rate5m
+          expr: |
+            sum by (service) (
+              rate(http_server_requests_seconds_count{namespace="k8s-workshop",outcome="SERVER_ERROR"}[5m])
+            )
+            or
+            service:http_server_requests:rate5m * 0
+
+        - record: service:http_client_errors:rate5m
+          expr: |
+            sum by (service) (
+              rate(http_server_requests_seconds_count{namespace="k8s-workshop",outcome="CLIENT_ERROR"}[5m])
+            )
+            or
+            service:http_server_requests:rate5m * 0
+
+        # Rules inside a group are evaluated in order, so the two ratios below
+        # read the series recorded above instead of repeating their expressions.
+        # That ordering is also what makes the zero fallback above available
+        # here.
+        - record: service:http_server_errors:ratio5m
+          expr: |
+            service:http_server_errors:rate5m
+              / service:http_server_requests:rate5m
+
+        - record: service:http_client_errors:ratio5m
+          expr: |
+            service:http_client_errors:rate5m
+              / service:http_server_requests:rate5m
+
+        # D. Summing the buckets by (service, le) before the quantile is what
+        # makes the percentile correct across pods; averaging per-pod
+        # percentiles would not be.
+        - record: service:http_server_request_duration_seconds:p50_5m
+          expr: |
+            histogram_quantile(0.50, sum by (service, le) (
+              rate(http_server_requests_seconds_bucket{namespace="k8s-workshop"}[5m])
+            ))
+
+        - record: service:http_server_request_duration_seconds:p95_5m
+          expr: |
+            histogram_quantile(0.95, sum by (service, le) (
+              rate(http_server_requests_seconds_bucket{namespace="k8s-workshop"}[5m])
+            ))
+
+        - record: service:http_server_request_duration_seconds:p99_5m
+          expr: |
+            histogram_quantile(0.99, sum by (service, le) (
+              rate(http_server_requests_seconds_bucket{namespace="k8s-workshop"}[5m])
+            ))
